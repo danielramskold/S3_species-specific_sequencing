@@ -1,6 +1,6 @@
 import subprocess, os, argparse, tempfile, sys
 
-version = '21 May 2015'
+version = '23 Aug 2016'
 
 def open_as_sam(filename):
 	if filename.endswith('.sam'):
@@ -25,6 +25,7 @@ def remove_genome_junction_redundant_mappingreads(merged_samfile, tmp_file, max_
 	# sort by readname
 	subprocess.check_call(['sort', merged_samfile,'-o', tmp_file])
 	reads = []
+	reads2 = []
 	lastreadname = None
 	with open(tmp_file) as infh:
 		for line in infh:
@@ -42,14 +43,25 @@ def remove_genome_junction_redundant_mappingreads(merged_samfile, tmp_file, max_
 					if flag.startswith("NM:i"): # bowtie
 						mismatches = int(flag.split(":")[-1])
 						break
-			if readname != lastreadname and len(reads)>0:
+			
+			if readname != lastreadname:
 				# process and write unique hits (if any)
-				reads.sort()
-				if reads[0][0] <= max_mismatch_num_unique and (len(reads) == 1 or (reads[1][0] - reads[0][0] >= min_mismatch_diff and reads[1][0] > max_mismatch_num_shared)):
-					# matches with <= x mismatches and other read has >= y mismatches or is unmapped
-					yield reads[0][-1]
+				if len(reads)>0:
+					reads.sort()
+					if reads[0][0] <= max_mismatch_num_unique and (len(reads) == 1 or (reads[1][0] - reads[0][0] >= min_mismatch_diff and reads[1][0] > max_mismatch_num_shared)):
+						# matches with <= x mismatches and other read has >= y mismatches or is unmapped
+						yield reads[0][-1]
+				if len(reads2)>0:
+					reads2.sort()
+					if reads2[0][0] <= max_mismatch_num_unique and (len(reads2) == 1 or (reads2[1][0] - reads2[0][0] >= min_mismatch_diff and reads2[1][0] > max_mismatch_num_shared)):
+						# matches with <= x mismatches and other read has >= y mismatches or is unmapped
+						yield reads2[0][-1]
 				reads = []
-			reads.append((mismatches, line))
+				reads2 = []
+			if int(parts[1]) & 0x80:
+				reads2.append((mismatches, line))
+			else:
+				reads.append((mismatches, line))
 			lastreadname = readname
 		
 		if len(reads)>0:
@@ -57,6 +69,11 @@ def remove_genome_junction_redundant_mappingreads(merged_samfile, tmp_file, max_
 			if reads[0][0] <= max_mismatch_num_unique and (len(reads) == 1 or (reads[1][0] - reads[0][0] >= min_mismatch_diff and reads[1][0] > max_mismatch_num_shared)):
 				# matches with <= x mismatches and other read has >= y mismatches or is unmapped
 				yield reads[0][-1]
+		if len(reads2)>0:
+			reads2.sort()
+			if reads2[0][0] <= max_mismatch_num_unique and (len(reads2) == 1 or (reads2[1][0] - reads2[0][0] >= min_mismatch_diff and reads2[1][0] > max_mismatch_num_shared)):
+				# matches with <= x mismatches and other read has >= y mismatches or is unmapped
+				yield reads2[0][-1]
 	
 
 def single_run(o):
@@ -153,3 +170,4 @@ if '__main__' == __name__:
 	#	if o.pretend: raise Exception
 	#	single_run(o)
 	
+
