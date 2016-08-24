@@ -1,6 +1,4 @@
 from __future__ import division
-# http://genomebiology.com/2010/11/3/r25
-# it's in the edgeR package, could just use that
 import argparse, dr_tools, numpy, math
 
 def log2(v):
@@ -24,9 +22,10 @@ if '__main__' == __name__:
 	parser.add_argument('outfile')
 	parser.add_argument('--ref_samples', nargs='+', metavar='samplename')
 	parser.add_argument('--copy_counts', action='store_true', help='does not work with stdin as input')
+	parser.add_argument('--run_on_counts', action='store_true')
 	o = parser.parse_args()
 	
-	expr_in = dr_tools.loadexpr(o.infile, counts=False)
+	expr_in = dr_tools.loadexpr(o.infile, counts=o.run_on_counts)
 	
 	ref_samples = expr_in.samples if o.ref_samples is None else o.ref_samples
 	Y_r = [numpy.mean([expr_in[s][gi] for s in ref_samples]) for gi in range(len(expr_in['symbols']))]
@@ -61,3 +60,4 @@ if '__main__' == __name__:
 	
 	dr_tools.writeexpr(o.outfile, expr_out, counts_expr=(dr_tools.loadexpr(o.infile, counts=True) if o.copy_counts else None), extra_comment_lines=[dr_tools.join('#TMM_normalization_factors', normalization_factors)])
 	
+
