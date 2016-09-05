@@ -7,16 +7,19 @@ python genomespecificmap_s3.py -i <human_alignment.sam> -f <mouse_alignment.sam>
 if the species are mouse and human. 
 The output file from STAR is normally called Aligned.out.sam.
 
+For paired-end reads, run
+python genomespecificmap_s3.py -i <human_alignment.sam> -f <mouse_alignment.sam> -o <human_s3.sam> -pe
+
 For more than two species, run for example:
 python genomespecificmap_s3.py -i <human_alignment.sam> -f <mouse_alignment.sam> <rat_alignment.sam> -o <human_s3.sam>
 
 Instead of sam files, you can use bam files as input and/or output. This requires you to have the samtools package installed (you can type samtools on the command line to see if it is installed). Then you can use a command such as:
 python genomespecificmap_s3.py -i <mouse_alignment.bam> -f <human_alignment.bam> -o <mouse_s3.bam>
 
-If you don't want separation based on mismatches, use -Mu 1000 -Ms 1000 -D 0 as options, e.g.:
+If you don't want separation based on mismatches, but on mere reporting by the aligner, use -Mu 1000 -Ms 1000 -D 0 as options, e.g.:
 python genomespecificmap_s3.py -i <mouse_alignment.sam> -f <human_alignment.sam> -o <mouse_s3.sam> -Mu 1000 -Ms 1000 -D 0
 
-To allow non-unique reads, or if your alignment program uses diffrent reporting of mapping qualities than STAR and bowtie, set -q to 0, e.g.:
+To allow non-unique reads, or if your alignment program uses different reporting of mapping qualities than STAR and bowtie, set -q to 0, e.g.:
 python genomespecificmap_s3.py -i <mouse_alignment.sam> -f <human_alignment.sam> -o <mouse_s3.sam> -q 0
 
-If you get an import error for argparse, make sure to included file argparse.py is in the same folder as genomespecificmap_s3.py
+If you get an import error for argparse, make sure the included file argparse.py is in the same folder as genomespecificmap_s3.py. argparse.py is a standard library taken from python2.7.
