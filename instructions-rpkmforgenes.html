@@ -1,0 +1,108 @@
+<html><head><title>rpkmforgenes.py manual</title></head><body>
+<h2>Help document for rpkmforgenes.py</h2>
+
+<p>The python script rpkmforgenes.py is written for calculating gene expression for RNA-Seq data. It was used for a study published in PLoS Computational Biology (Ramsk&ouml;ld D, Wang ET, Burge CB, Sandberg R. <a href="http://www.ploscompbiol.org/article/info%3Adoi%2F10.1371%2Fjournal.pcbi.1000598">An abundance of ubiquitously expressed genes revealed by tissue transcriptome sequence data</a>), which describes the algorithm.
+</p>
+
+<p><b>Sequence data input:</b>
+<br>A common input file format is bed file. In the simplest form, it has the format
+<br>chromosome -tab- startposition -tab- endposition
+<br>where each line corresponds to one sequence read
+<br>However this format can also include strand information:
+<br>chromosome -tab- startposition -tab- endposition -tab- name -tab- score -tab- +/-
+<br>for example:
+<br>chr13   54005048        54005081        .       1       -
+<br>The score field is ignored.
+<br>Files are allowed by have an optional first line starting with "track", this line is then ignored
+<br>For SAM and BAM files, -bamu is the fastest and least memory-using 
+<br>Other input formats can be specified by -bedspace, -gff, -bowtie, -bedcompacted. -bowtie uses the default output format of Bowtie,
+<br>For SAM and BAM files, -bamu is the recommended option (and default for BAM files). -sam and -bam are available because they remove non-uniquely mapping reads, but use a lot of memory. The reading of BAM files requires installation of the <a href="http://code.google.com/p/pysam/">pysam module</a>. -samu is somewhat slower than -bamu but work without pysam and without a SAM file header. SAM and BAM are the only input formats for which the program has built-in support for paired-end reads.
+<br>
+<br>Gzipped (.gz) and bzipped (.bz2) files can be used as input read files.
+<br>If you use multiple input files, you can specifify with the parameter -p how many files should be processed in parallel
+</p>
+
+<p><b>Other read-related options:</b>
+<br>-bothends makes the program map both the start and end position of a read, counting them as 0.5 reads each. For the SAM format, the CIGAR field is used to calculate read end. For paired-end reads, -bothends counts the counts the 4 ends as 0.25 reads each; without -bothends only the start of the first mate is counted. With -bothendsceil and -readcount together, the printed number of reads is rounded upwatds to the nearest integer, but RPKM numbers are the same as for -bothends.
+<br>-midread uses themiddle of the read as its position
+<br>-swapstrands reverses the strandedness of reads.
+<br>-diffreads makes the program only count one read if several reads have the same coordinates, lengths and strandedness. For paired-end data in SAM format, both mates need to be the same to only be counted as one. This option can be useful for detecting whether a gene is expressed or not, as PCR duplicates are not counted several times. However, it has a saturation effect on gene expression.
+<br>-minqual Value removes reads with lower mapping quality than Value, --maxNM Value removes SAM/BAM reads with more mismatches than Value. Works at least with bowtie2.
+</p>
+
+<p><b>Annotation input:</b>
+<br>The files refGene.txt (RefSeq), ensGene.txt (Ensembl) etc. can be downloaded from the download archive of UCSC Genome browser. Many other annotation files use the same format these, the genePred format. The area to be used can be tweaked by the switches -onlycoding, -maxlength, -fulltranscript
+<br>-maxlength truncates genes (from 3' end if positive, from 5' end if negative)
+<br>-onlycoding makes the program skip noncoding transcripts (identified by having cdsstart=cdsend in the annotation file)
+<br>-no3utr removes the 3'UTR from annotations
+<br>Custom annotation can be used instead in bed format, with the -bedann switch.
+<br>-bedann uses a file in the format
+<br>chromosome -tab- startposition -tab- endposition
+<br>and a number of optional fields, see <a href="http://genome-mirror.binf.ku.dk/goldenPath/help/customTrack.html#BED">the definition</a>. Blocks represent exons, and the thick region the coding region (set its start and end to 0 for non-coding). Positions are 0-based and the score, RGB and blockcount fields are ignored. If strand is not specified and strand option is used, + strand is used, but you can use the -swapstrands option to have the reads on the - strand map to the regions instead.
+<br>-ensgtfann is made to work with the GTF format for  genes at Biomart. The parser is slow though.
+<br>-introns makes the program calculate gene expression over introns instead of exons. Only introns that do not overlap exons of other transcripts are used.
+</p>
+
+<p><b>Expression normalisation:</b>
+<br>The default gene expression output is the number of reads divided by the total length of exons of the gene and number of reads that map to any mRNA exons in the genome. If the annotation does not contain mRNAs or does not specify coding regions, all exons are used. -allmapnorm (use the total number of reads in the input file) and -forcedtotal can be used to change the number of reads parameter, and -u the length parameter. RPKM values appear to be in the same order of magnitude as transcripts per cell for human tissues, assuming several hundred thousand mRNA transcript per cell.
+<br>-u uses as input a directory where file are named chr1.fa, chr2.fa etc and where each base is upper case if the k-mer is unique in the genome (where k = the read length) and lower case if it is not unique. Positions that are not unique do not count toward the gene length. Alternatively, -u can take a bigWig (.bw) file with mappable positions (as found <a href="http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeMapability/">here for hg19</a>). This requires the program bigWigSummary (follow the link from <a href="http://bioinformatics.oxfordjournals.org/cgi/content/abstract/btq351v1">this article</a>) to be in the same folder as rpkmforgenes.py. Without -u all positions are counted.
+<br>-u also works with the files from <a href=http://sandberg.cmb.ki.se/multo/>http://sandberg.cmb.ki.se/multo/</a>, this is the easiest way to use it. -u should be followed on the command line by the folder where the files per chromosome are stored. The 'Transcriptome (Gene-level)' files are the most appropriate ones for most RNA-Seq data.
+</p>
+
+<p><b>Transcript to gene collapse:</b>
+<br>By default, gene variants that overlap are cluster into a single "gene" for output. Reads are divided between different variants according to their estimated expression, the normalisation to RPKM is done per variant, and these RPKM values are summed (<a href="http://www.ploscompbiol.org/article/fetchSingleRepresentation.action?uri=info:doi/10.1371/journal.pcbi.1000598.s007">Figure S6</a>, Ramsk&ouml;ld et al. PLoS Comput Biol. has a more exact explanation)
+<br>Using -rmnameoverlap removes regions where several transcripts overlap where the transcripts have different gene identifiers - regions common to different isoforms are kept. This is usually a good option to use.
+<br>Using -limitcollapse only groups variants that overlap directly. The can result in a variant being reported in more than one "gene" (line in the output).
+<br>Using -nocollapse reports the expression values without summing them together. Since division of read density to variants is error-prone, the values can vary considerably between replicates.
+<br>Using -flat collapsed the variant into a single "transcript" containing all exons before calculating gene expression.
+<br>The switch -nodeconvolution turns off the grouping of gene variants, so that reads that match more than one region/variant in the annotation file is counted once for each region.
+</p>
+
+<p><b>Output file:</b>
+<br>The first four lines contain information about the input files and matching to genes:
+<br>line 1: read input files (tab separated)
+<br>line 2: number of aligned reads per file in the input
+<br>line 3: the normalization constant in terms of number of reads, per file
+<br>line 4: the parameters that were used to run the program, and the UTC time it was run
+<br>Next, each gene is one line, in the format
+<br>gene -tab- transcript -tab- expression for file 1 -tab- expression for file 2 -tab- etc
+<br>For annotation formats which do not have gene name information, the first field has strand instead of gene in it
+<br>If several genes/transcripts overlapped, they will all be recorded in the symbol and ID field, separeded by a + sign.
+<br>The expression is in reads per kilobase of gene length and milion of mapped reads
+<br>The switch -readcount adds the number of reads in any exon of the gene to the output. This adds N columns, where N is the number of input files, to the end of each line
+<br>-bedann/-gffann replaces the symbol field with the region (e.g. chr1:4794540-4796973) and the ID field by the region name in the annotation file (or . for -bedann if the bed file has to fourth column). Note that full GFF/GTF support has not been implemented.
+<br>If -table is used,but not -readcount, the format is instead:
+<br>line 1: read input files
+<br>Next, each gene is one line, in the format
+<br>Name -tab- expression for file 1 -tab- expression for file 2 -tab- etc
+<br>When -table is used together with -readcount, number of reads replace the expression fields.
+</p>
+
+<p><b>Running the program:</b>
+<br>It can be run from command line, for example:
+<br>python rpkmforgenes.py -i GSM365015.bed GSM365016.bed -readcount -a refGene.txt -o output.txt -fulltranscript -rmnameoverlap
+<br>It has been tested and works under python versions 2.5, 2.6 and 2.7, and requires the package numpy (sometimes installed by default with python). If bam files are used, the pysam package is needed.
+</p>
+
+<p><b>History:</b>
+<br>10 March 2010: added -sam and -bothends options.
+<br>6 June 2010: made -exonnorm default, assumed 1-based coordinates in SAM and gff input
+<br>3 July 2010: changed to normalize by only reads in mRNAs by default, added full bed format as annotation option, changed the third output header line
+<br>6 August 2010: added -unique and -flat options, and -u can take a bigWig file with mappable positions
+<br>11 August 2010: removed -unique option, made -sam option remove multimapping reads and handle paired-end reads
+<br>17 November 2010: added -samse and -bam options
+<br>5 January 2011: allowed to read from fasta files with -u, corrected read count reporting under -nocollapse, added detection of .bigWig suffix
+<br>24 January 2011: changed first output column under -gftann, added -randomreads option
+<br>9 February 2011: fixed error 0 total reads and made bam files readable with an index
+<br>12 April 2011: added -namecollapse option, fixed [well, attempted] bug in isoform deconvolution that would give an extremely high level for one gene
+<br>24 April 2012: more fixing of a bug that occasionally gave one massively too high RPKM value, added -p (parallel processing), -quite (less output to terminal), -table (other output format), -rmnameoverlap (skips regions annotated to multiple genes), made ouput order same as in input annotation file (and -sortpos for previous output order)
+<br>13 September 2012: made -fulltranscript default, added and made -bamu default for BAM files, -samu default for SAM files,  added -minqual and -maxNM, fixed so multiprocessing (-p) works with -exportann and -forcedtotal
+<br>19 October 2012: bug-fixed how -u works with -strand, added -bothendsceil
+<br>11 April 2013: bug-fixes to make it work for strand-specific paired-end data work, fixed -bothends gving 2x too large values, started counting empty CIGAR fields as unmapped reads to get compatibility with some alignment program, added -readpresent, -norandom, -midread, -ensgtfann
+<br>13 Mar 2015: made -maxNM also check nM flag (used by rna-star), fixed a bug for -bamu and -mapends where it double-counted paired-end reads, added -rmregions to allow removing problem regions, added -addchr to deal with a case of ucsc genome browser/ensembl clash
+</p>
+
+<p><b>Links:</b>
+<br>Link to program: <a href="https://github.com/danielramskold/S3_species-specific_sequencing/blob/master/rpkmforgenes.py">rpkmforgenes.py</a></p>
+
+</body></html>
