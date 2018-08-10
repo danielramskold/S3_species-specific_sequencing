@@ -3,7 +3,7 @@
 Calculates gene expression from a read mapping file
 """
 
-lastmodified = "13 Mar 2015"
+lastmodified = "9 Aug 2018"
 author = "Daniel Ramskold"
 #4 june 2010: now assumes sam and gff files use 1-based coordinates, not 0-based, -exonnorm is default
 #6 june 2010: partially rewrote code for overlapping exons from different isoforms, swapped ID and symbol fields for some annotation types
@@ -67,6 +67,8 @@ author = "Daniel Ramskold"
 #8 jan 2015: added *_alt to removed chromosomes unless -keephap is used
 #23 Jan 2015: made -maxNM also check nM flag (used by rna-star)
 #13 Mar 2015: added hidden flag -blocksize
+#7 Jun 2018: added flag -skipiffewreads
+#9 Aug 2018: added chrUn_ to chromosome name partial matches that are removed from annotaion by -norandom (fix for hg38), modified how -rnnameoverlap interact with gene model collapse (can be returned to old behaviour with -limitcollapse2), added -namesum
 
 from numpy import matrix, linalg
 import numpy, sys, time, os, subprocess, math
@@ -1074,7 +1076,7 @@ def mappos(chrindex, readpos):
 		return []
 	return [exon for exon in window if exon.start <= readpos < exon.end]
 	
-def make_overlapsets(currentgene, genecollapse, limitcollapse):
+def make_overlapsets(currentgene, genecollapse, limitcollapse, limitcollapse2, add_overlapsets = None):
 	currentgene.overlapsets = []
 	currentgene_exons = [exon for exon in currentgene.exons if not exon.forbidden]
 	# generate the sets of overlapping transcripts
@@ -1087,6 +1089,18 @@ def make_overlapsets(currentgene, genecollapse, limitcollapse):
 					if not totx in fromtx.overlaptx:
 						if genecollapse and fromtx.genename != totx.genename: continue
 						fromtx.overlaptx.append(totx)
+	
+	# in the middle, add in genes who lost. or didn't lose, internal conection due to -rmnameoverlap
+	# should have helped, doesn't seem to though
+	if (add_overlapsets is not None) and not limitcollapse2:
+		for overlapset in add_overlapsets:
+			for txi, fromtx in enumerate(overlapset):
+				for totx in overlapset[txi+1:]:
+					if totx not in fromtx.overlaptx:
+						fromtx.overlaptx.append(totx)
+					if fromtx not in totx.overlaptx:
+						totx.overlaptx.append(fromtx)
+	
 	# secondly follow the overlap to see indirect overlap
 	donetx = []
 	for fromtx in currentgene.transcripts:
@@ -1106,7 +1120,7 @@ def make_overlapsets(currentgene, genecollapse, limitcollapse):
 					donetx.append(totx)
 					hasadded = 1
 		currentgene.overlapsets.append(currentoverlaptx)
-
+	
 	if sum([len(s) for s in currentgene.overlapsets]) != len(currentgene.transcripts):
 		if vocal: print "Warning at gene model collapse. Info:", currentgene.name, [tx.ID for tx in currentgene.transcripts], [[tx.ID for tx in s] for s in currentgene.overlapsets]
 
@@ -1123,20 +1137,19 @@ def merge(o_infiles, o_outfile):
 			for line in infh:
 				p = line.rstrip('\r\n').split('\t')
 				if p[0] == '#samples':
-					header[0] += '\t' + '\t'.join(p[1:])
+					header[0] += ''.join(['\t' + v for v in p[1:]])
 					lnumsamples = len(p) - 1
 				elif p[0] == '#allmappedreads':
-					header[1] += '\t' + '\t'.join(p[1:])
+					header[1] += ''.join(['\t' + v for v in p[1:]])
 				elif p[0] in ('#genemappedreads', '#normalizationreads'):
-					header[2] += '\t' + '\t'.join(p[1:])
+					header[2] += ''.join(['\t' + v for v in p[1:]])
 				elif line[0] != '#':
 					if numgenes is None:
 						genelines.append('\t'.join(p[:2]))
 						readlines.append('')
-					genelines[lnumgenes] += '\t' + '\t'.join(p[2:2+lnumsamples])
+					genelines[lnumgenes] += ''.join('\t'+s for s in p[2:2+lnumsamples])
 					readlines[lnumgenes] += ''.join('\t'+s for s in p[2+lnumsamples:2+2*lnumsamples])
 					lnumgenes += 1
-					
 			if numgenes is None:
 				numgenes = lnumgenes
 			elif numgenes != lnumgenes:
@@ -1221,6 +1234,7 @@ def main():
 		print " -rmnameoverlap to ignore regions shared my multiple genes (seems to work well)"
 		print " -rmregions followed by a bed file of regions which should be removed from genes"
 		print " -flat to flatten all isoforms to one gene model (likely to give too low RPKM values)"
+		print " -namesum to sum together all entries with the same gene name even if they are apart on the genome"
 		print " -txunique to ignore regions shared by multiple gene isoforms"
 		print " -onlycoding to ignore noncoding transcripts"
 		print " -swapstrands to make reads on + strand map to genes on - and vice versa (and sets -strand)"
@@ -1239,8 +1253,8 @@ def main():
 		print " -bowtie the default output format of bowtie"
 #		print " -sam SAM format, and to remove non-unique hits" # broken read counting
 #		print " -bam BAM format, and to remove non-unique hits" # broken read counting
-		print " -samse SAM format, uniquely mapped reads (faster than -sam, , default for SAM))"
-		print " -bamu BAM or SAM format, uniquely mapped reads (faster than -bam or -samse, default for BAM)"
+		print " -samse SAM format, uniquely mapped reads (default for SAM)"
+		print " -bamu BAM or SAM format, uniquely mapped reads (faster than -samse, default for BAM)"
 		print " -gff GFF file with reads, no groups"
 		print "Normalisation options:"
 		print " -mRNAnorm to normalize by the number of reads matching mRNA exons (default)"
@@ -1261,6 +1275,7 @@ def main():
 		print " -diffreads to count only one read if several have the same position, strand and length (use with -bam or -sam if paired-end; samtools rmdup is generally better)"
 		print " -maxreads followed by maximum number of reads to be used"
 		print " -randomreads to make -maxreads pick reads at random"
+		print " -skipiffewreads to ignore samples with fewer than -maxreads reads in the input"
 		print " -minqual followed by an integer, to restrict reads to minimum this mapping quality (for sam, bam) or score (for bed, gff), default use all"
 		print " -maxNM followed by an integer, to restrict reads to maximum this edit distance (nM or NM flag in sam, bam), default use all"
 		print " -addchr to add the text 'chr' to read chromosome field, to resolve Ensembl genome/UCSC annotation mismatch"
@@ -1415,6 +1430,8 @@ def main():
 	else: COLLAPSEGENES = 1
 	if testargumentflag("-limitcollapse"): limitcollapse = 1
 	else: limitcollapse = 0
+	if testargumentflag("-limitcollapse2"): limitcollapse2 = 1   # like -limitcollapse, this is for legacy behaviour
+	else: limitcollapse2 = 0
 	genecollapse = testargumentflag("-namecollapse")
 	if testargumentflag("-fulltranscript"): FULLTRANSCRIPTS = 1
 	elif testargumentflag("-no3utr"): FULLTRANSCRIPTS = 0
@@ -1460,7 +1477,8 @@ def main():
 	if testargumentflag("-maxreads"):
 		MAXREADS = int(getargument("-maxreads"))
 		randomreads = testargumentflag("-randomreads")
-	else: MAXREADS = 0; randomreads = 0
+		skipiffewreads = testargumentflag("-skipiffewreads")
+	else: MAXREADS = 0; randomreads = 0; skipiffewreads = 0
 	if testargumentflag("-table"): outputformat = 'table'
 	else: outputformat = 'v2'
 	if testargumentflag("-readcount"): addreadcount = 1
@@ -1503,6 +1521,7 @@ def main():
 		mapends_ceil = 0
 	midread = testargumentflag("-midread")
 	flattengenes = testargumentflag("-flat")
+	fullgenenamesum = testargumentflag("-namesum")
 	ignoredchrfragments = []
 	if not testargumentflag("-keephap"):
 		ignoredchrfragments.append("_hap")
@@ -1512,6 +1531,7 @@ def main():
 		keephap = True
 	if testargumentflag("-norandom"):
 		ignoredchrfragments.append("_random")
+		ignoredchrfragments.append("chrUn_")
 		keeprandom = False
 	else:
 		keeprandom = True
@@ -1767,7 +1787,7 @@ def main():
 			gene.exons = [exon for exon in possibleexons if len(exon.transcripts) > 0]
 			
 			if removenameoverlap:
-				make_overlapsets(gene, genecollapse, limitcollapse)
+				make_overlapsets(gene, genecollapse, limitcollapse, limitcollapse2, None)
 				for overlapset in gene.overlapsets:
 					num_exons = 0
 					removal_set = []
@@ -1785,12 +1805,22 @@ def main():
 				if exon.forbidden:
 					exon.transcripts = []
 			
-			make_overlapsets(gene, genecollapse, limitcollapse)
+			if removenameoverlap:
+				singlegeneoverlaps = []
+				for overlapset in gene.overlapsets:
+					for genename in set(tx.genename for tx in overlapset):
+						transcripts = [tx for tx in overlapset if tx.genename == genename]
+						if len(transcripts) >= 2:
+								singlegeneoverlaps.append(transcripts)
+			else:
+				singlegeneoverlaps = None
+			
+			make_overlapsets(gene, genecollapse, limitcollapse, limitcollapse2, singlegeneoverlaps)
 			
 		# generate overlapsets
 		if COLLAPSEGENES or flattengenes:
 			for gene in genes:
-				make_overlapsets(gene, genecollapse, limitcollapse)
+				make_overlapsets(gene, genecollapse, limitcollapse, limitcollapse2, singlegeneoverlaps)
 			
 			# flatten to one isoform if requested
 			if flattengenes:
@@ -1839,7 +1869,8 @@ def main():
 	has_not_calc_ulen = True
 	
 	# get the reads
-	for infile in infiles:
+	if skipiffewreads: infiles_i_skip = []
+	for infile_i, infile in enumerate(infiles):
 		from collections import defaultdict
 		readlength_dict = defaultdict(int) if global_readlength is None else None
 		for gene in genes:
@@ -1892,9 +1923,13 @@ def main():
 		usedreads = 0
 		totalreads = 0
 		
-		if randomreads:
+		if randomreads or skipiffewreads:
 			l_totalreads = sum(1 for x in readgen(infile, True, None))
-			inclusionlist = tuple(v>=MAXREADS for v in numpy.random.permutation(l_totalreads))
+			if skipiffewreads and l_totalreads < MAXREADS:
+				infiles_i_skip.append(infile_i)
+				continue
+			if randomreads:
+				inclusionlist = tuple(v>=MAXREADS for v in numpy.random.permutation(l_totalreads))
 		for chrID, read_tuple in readgen(infile, False, readlength_dict):
 			totalreads += 1
 			if randomreads:
@@ -1932,7 +1967,7 @@ def main():
 					exon.reads += 1.0/len(read_tuple)
 				else:
 					exon.reads += 1
-		if randomreads: totalreads = MAXREADS
+		if randomreads: totalreads = min(totalreads, MAXREADS)   # changed 7 Jun 2018
 		if vocal: print "Has compared reads to exons"
 		
 		if has_not_calc_ulen and global_readlength is not None:
@@ -2138,7 +2173,11 @@ def main():
 		
 		usedreadspersample.append(usedreads)
 		totalreadspersample.append(totalreads)
-		
+	
+	if skipiffewreads:
+		infiles = [f for i,f in enumerate(infiles) if i not in infiles_i_skip]
+		names = [f for i,f in enumerate(names) if i not in infiles_i_skip]
+	
 	tunits = []
 	if COLLAPSEGENES and not flattengenes:
 		for currentgene in genes:
@@ -2191,6 +2230,22 @@ def main():
 					tu.rpkms[si] *= samplefactor
 					if vocal and tu.rpkms[si] > 1e6:
 						print 'Warning: %s has a very high RPKM value of %f'%(tu.name1, tu.rpkms[si])
+	
+	# sum up expression for each gene name
+	if fullgenenamesum:
+		tunits.sort(key=lambda unit: unit.name1)
+		tui = 1
+		while tui < len(tunits):
+			#print type(tunits[tui].name1)
+			if tunits[tui].name1 == tunits[tui-1].name1:
+				tunits[tui-1].name2 += '++' + tunits[tui].name2
+				tunits[tui-1].rpkms += tunits[tui].rpkms
+				tunits[tui-1].reads += tunits[tui].reads
+				tunits[tui-1].sortnum = min(tunits[tui-1].sortnum, tunits[tui].sortnum)
+				print tunits[tui].name2, tunits[tui-1].name2, tunits[tui].name1
+				del tunits[tui]
+			else:
+				tui += 1
 	
 	# output to file
 	outfileh = openfile(outfile, "w")
