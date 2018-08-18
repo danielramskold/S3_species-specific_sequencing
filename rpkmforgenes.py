@@ -3,7 +3,7 @@
 Calculates gene expression from a read mapping file
 """
 
-lastmodified = "9 Aug 2018"
+lastmodified = "17 Aug 2018"
 author = "Daniel Ramskold"
 #4 june 2010: now assumes sam and gff files use 1-based coordinates, not 0-based, -exonnorm is default
 #6 june 2010: partially rewrote code for overlapping exons from different isoforms, swapped ID and symbol fields for some annotation types
@@ -69,6 +69,8 @@ author = "Daniel Ramskold"
 #13 Mar 2015: added hidden flag -blocksize
 #7 Jun 2018: added flag -skipiffewreads
 #9 Aug 2018: added chrUn_ to chromosome name partial matches that are removed from annotaion by -norandom (fix for hg38), modified how -rnnameoverlap interact with gene model collapse (can be returned to old behaviour with -limitcollapse2), added -namesum
+#16 Aug 2018: warned for -midread
+#17 aug 2018: removed a print statement
 
 from numpy import matrix, linalg
 import numpy, sys, time, os, subprocess, math
@@ -1271,7 +1273,7 @@ def main():
 		print " -strand to use strand information of reads"
 		print " -bothends to also map the end positions to genes, each end counted as 0.5 (or 0.25 for paired-end reads)"
 		print " -bothendsceil to set -bothends but round the read count upward"
-		print " -midread to use middle of the read as read position"
+		print " -midread to use middle of the read as read position (buggy for RNA)"
 		print " -diffreads to count only one read if several have the same position, strand and length (use with -bam or -sam if paired-end; samtools rmdup is generally better)"
 		print " -maxreads followed by maximum number of reads to be used"
 		print " -randomreads to make -maxreads pick reads at random"
@@ -2236,13 +2238,11 @@ def main():
 		tunits.sort(key=lambda unit: unit.name1)
 		tui = 1
 		while tui < len(tunits):
-			#print type(tunits[tui].name1)
 			if tunits[tui].name1 == tunits[tui-1].name1:
 				tunits[tui-1].name2 += '++' + tunits[tui].name2
 				tunits[tui-1].rpkms += tunits[tui].rpkms
 				tunits[tui-1].reads += tunits[tui].reads
 				tunits[tui-1].sortnum = min(tunits[tui-1].sortnum, tunits[tui].sortnum)
-				print tunits[tui].name2, tunits[tui-1].name2, tunits[tui].name1
 				del tunits[tui]
 			else:
 				tui += 1
