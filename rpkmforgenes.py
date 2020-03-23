@@ -3,7 +3,7 @@
 Calculates gene expression from a read mapping file
 """
 
-lastmodified = "17 Aug 2018"
+lastmodified = "20 Nov 2018"
 author = "Daniel Ramskold"
 #4 june 2010: now assumes sam and gff files use 1-based coordinates, not 0-based, -exonnorm is default
 #6 june 2010: partially rewrote code for overlapping exons from different isoforms, swapped ID and symbol fields for some annotation types
@@ -71,6 +71,9 @@ author = "Daniel Ramskold"
 #9 Aug 2018: added chrUn_ to chromosome name partial matches that are removed from annotaion by -norandom (fix for hg38), modified how -rnnameoverlap interact with gene model collapse (can be returned to old behaviour with -limitcollapse2), added -namesum
 #16 Aug 2018: warned for -midread
 #17 aug 2018: removed a print statement
+#14 Sep 2018: added -tpm
+#19 sep 2018: readded 16-17 aug changes that had disappeared by accidental forking
+#20 nov 2018: fixed a bug where -namesum would push RPKM values into the reads section
 
 from numpy import matrix, linalg
 import numpy, sys, time, os, subprocess, math
@@ -1263,6 +1266,7 @@ def main():
 		print " -exonnorm to normalize by the number of reads matching exons, including ncRNA"
 		print " -allmapnorm to normalize by the total number of mapped reads (default if annotation contains no mRNA)"
 		print " -forcedtotal followed by a number of reads for each sample to set a constant to normalise by"
+		print " -tpm to calculate tags per million instead of RPKM"
 		print "Output format options:"
 		print " -readcount to add the number of reads to the output"
 		print " -table another output format"
@@ -1273,7 +1277,7 @@ def main():
 		print " -strand to use strand information of reads"
 		print " -bothends to also map the end positions to genes, each end counted as 0.5 (or 0.25 for paired-end reads)"
 		print " -bothendsceil to set -bothends but round the read count upward"
-		print " -midread to use middle of the read as read position (buggy for RNA)"
+		print " -midread to use middle of the read as read position  (buggy for RNA)"
 		print " -diffreads to count only one read if several have the same position, strand and length (use with -bam or -sam if paired-end; samtools rmdup is generally better)"
 		print " -maxreads followed by maximum number of reads to be used"
 		print " -randomreads to make -maxreads pick reads at random"
@@ -1522,7 +1526,8 @@ def main():
 		mapends = 0
 		mapends_ceil = 0
 	midread = testargumentflag("-midread")
-	flattengenes = testargumentflag("-flat")
+	flattengenes = testargumentflag("-flat") or testargumentflag("-tpm") # auto-set of calculating TPM
+	use_tpm = testargumentflag("-tpm")
 	fullgenenamesum = testargumentflag("-namesum")
 	ignoredchrfragments = []
 	if not testargumentflag("-keephap"):
@@ -2215,6 +2220,8 @@ def main():
 					if tx in exon.transcripts:
 						for ii in range(len(tunit.rpkms)):
 							tunit.reads[ii] += exon.readspersample[ii]
+				if use_tpm:
+				    tunit.rpkms = [reads*1e6/totalreads for reads, totalreads in zip(tunit.reads, totalreadspersample)]
 				tunits.append(tunit)
 
 	# change normalisation if requested
@@ -2240,8 +2247,8 @@ def main():
 		while tui < len(tunits):
 			if tunits[tui].name1 == tunits[tui-1].name1:
 				tunits[tui-1].name2 += '++' + tunits[tui].name2
-				tunits[tui-1].rpkms += tunits[tui].rpkms
-				tunits[tui-1].reads += tunits[tui].reads
+				tunits[tui-1].rpkms = [r1+r2 for r1,r2 in zip(tunits[tui-1].rpkms, tunits[tui].rpkms)]
+				tunits[tui-1].reads = [r1+r2 for r1,r2 in zip(tunits[tui-1].reads, tunits[tui].reads)]
 				tunits[tui-1].sortnum = min(tunits[tui-1].sortnum, tunits[tui].sortnum)
 				del tunits[tui]
 			else:
