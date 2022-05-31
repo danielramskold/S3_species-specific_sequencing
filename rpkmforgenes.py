@@ -3,7 +3,7 @@
 Calculates gene expression from a read mapping file
 """
 
-lastmodified = "20 Nov 2018"
+lastmodified = "26 May 2022"
 author = "Daniel Ramskold"
 #4 june 2010: now assumes sam and gff files use 1-based coordinates, not 0-based, -exonnorm is default
 #6 june 2010: partially rewrote code for overlapping exons from different isoforms, swapped ID and symbol fields for some annotation types
@@ -74,6 +74,9 @@ author = "Daniel Ramskold"
 #14 Sep 2018: added -tpm
 #19 sep 2018: readded 16-17 aug changes that had disappeared by accidental forking
 #20 nov 2018: fixed a bug where -namesum would push RPKM values into the reads section
+#4 apr 2022: added -tmm
+#26 May 2022: fixed crash when using -tmm
+#31 May 2022: added -csv, fixed zero-stripping TMM count export bug, added .gz/.bz2 support here and there
 
 from numpy import matrix, linalg
 import numpy, sys, time, os, subprocess, math
@@ -83,6 +86,204 @@ uniqueposdir = "none"
 
 if False: # check if print statement works, SyntaxError if it doesn't
 	print 'This program does not work under python 3, run it in python 2.5/2.6/2.7'
+
+def join(*args, **kwargs):
+	""" returns tab-separated string """
+	try: sep = kwargs["sep"]
+	except: sep = "\t"
+	array = []
+	for a in args:
+		iterable = hasattr(a, '__iter__')
+		if iterable and isinstance(a, str): iterable = False
+		try:
+			if iterable and isinstance(a, unicode): iterable = False
+		except NameError: pass
+		if iterable: array.extend(a)
+		else: array.append(a)
+	return sep.join(map(str, array))
+
+def strip_end_zeros(number):
+	string = str(number)
+	if '.' in string or ',' in string:
+		while string.endswith('0'): string = string[:-1]
+		if string.endswith('.') or string.endswith(','): string = string[:-1]
+	return string
+
+def quote_if_comma_within(text):
+	if ',' in text or '\n' in text or '"' in text: text = '"'+text+'"'
+	return text
+
+def writeexpr_csv(filename, rpkm_expr, samples=None, row_indices=None):
+	import sys, time
+	if samples is None: samples = rpkm_expr.samples
+	if row_indices is None: row_indices = range(len(rpkm_expr['symbols']))
+	with openfile(filename, 'w') as outfh:
+		_print(join('symbol',[quote_if_comma_within(s) for s in samples], sep=','), file=outfh)
+		for i in row_indices:
+			symbol = rpkm_expr['symbols'][i]
+			values_rpkm = (quote_if_comma_within(strip_end_zeros(rpkm_expr[s][i])) for s in samples)
+			_print(join(quote_if_comma_within(symbol), values_rpkm, sep=','), file=outfh)
+
+def getpotentialargument(flag):
+	# the argument after the flag
+	flagindex = sys.argv.index(flag)
+	if flagindex + 1 == len(sys.argv) or sys.argv[flagindex+1][0] == '-': return None
+	return sys.argv[flagindex+1]
+
+def convert_to_csv(outfile, readcountcsvfile):
+	expr_rpkms = loadexpr(outfile, False)
+	if readcountcsvfile is not None: expr_counts = loadexpr(outfile, True)
+	writeexpr_csv(outfile, expr_rpkms)
+	if readcountcsvfile is not None: writeexpr_csv(readcountcsvfile, expr_counts)
+
+def run_tmm(infile, outfile, copy_counts=True, run_on_counts=False, ref_samples=None):
+	def log2(v):
+		return math.log(v, 2)
+	def M(gi, Y_k, Y_r, N_k, N_r):
+		return log2((float(Y_k[gi])/N_k)/(float(Y_r[gi])/N_r))
+	def M_logdivlog(gi, Y_k, Y_r, N_k, N_r):
+		return log2(float(Y_k[gi])/N_k)/log2(float(Y_r[gi])/N_r)
+	def w(gi, Y_k, Y_r, N_k, N_r):
+		return float(N_k - Y_k[gi])/N_k/Y_k[gi] + float(N_r - Y_r[gi])/N_r/Y_r[gi]
+	def A(gi, Y_k, Y_r, N_k, N_r):
+		return 0.5*log2(float(Y_k[gi])/N_k * Y_r[gi]/N_r) if Y_k[gi] > 0 else -10000
+	expr_in = loadexpr(infile, counts=run_on_counts)
+	
+	ref_samples = expr_in.samples if ref_samples is None else ref_samples
+	Y_r = [numpy.mean([expr_in[s][gi] for s in ref_samples]) for gi in range(len(expr_in['symbols']))]
+	N_r = sum(Y_r)
+	
+	expr_out = Parsed_rpkms([], False)
+	normalization_factors = []
+	failed = False
+	for s in expr_in.samples:
+		Y_k = expr_in[s]
+		N_k = sum(Y_k)
+		nonzero = [gi for gi in range(len(expr_in['symbols'])) if Y_k[gi] > 0 and Y_r[gi] > 0]
+		A_distr = sorted((A(gi, Y_k, Y_r, N_k, N_r), gi) for gi in nonzero)
+		M_distr = sorted((M(gi, Y_k, Y_r, N_k, N_r), gi) for gi in nonzero)
+		
+		Gstar = set(gi for A_val,gi in A_distr[int(0.05*len(A_distr)):-int(0.05*len(A_distr))]) & set(gi for M_val,gi in M_distr[int(0.3*len(M_distr)):-int(0.3*len(M_distr))])
+		
+		if len(nonzero) == 0: f_k = 1
+		else:
+			try: log2TMM = float(sum(w(gi, Y_k, Y_r, N_k, N_r) * M(gi, Y_k, Y_r, N_k, N_r) for gi in Gstar))/sum(w(gi, Y_k, Y_r, N_k, N_r) for gi in Gstar)
+			except ZeroDivisionError:
+				if vocal: print "TMM normalisation failed!"
+				failed = True
+				f_k = 1
+			else:
+				f_k = 2**log2TMM # multipy non-reference by this value
+		
+		
+		expr_out[s] = [Y_k[gi]/f_k for gi in range(len(expr_in['symbols']))]
+		normalization_factors.append(f_k)
+	expr_out.allmappedreads = expr_in.allmappedreads
+	expr_out.normalizationreads = [nr*nf for nr, nf in zip(expr_in.normalizationreads, normalization_factors)]
+	expr_out.samples = expr_in.samples
+	expr_out['symbols'] = expr_in['symbols']
+	expr_out['IDs'] = expr_in['IDs']
+	
+	writeexpr(outfile, expr_out, counts_expr=(loadexpr(infile, counts=True) if copy_counts else None))
+	return failed
+
+def loadexpr(infiles, counts=False):
+	"""
+	loads from output of rpkmforgenes.py
+	"""
+	if isinstance(infiles, str): infiles = [infiles]
+	values = Parsed_rpkms(infiles, counts)
+	numsymbols = None
+	for infile in infiles:
+		samples = None
+		with openfile(infile, 'r') as infh:
+			for line in infh:
+				p = line.rstrip('\r\n').split('\t')
+				if p[0] == '#samples':
+					samples = p[1:]
+					values.update(dict((n,[]) for n in samples))
+					values['symbols'] = []
+					values['IDs'] = []
+					indexstart = 2+len(samples) if counts else 2
+					values.samples.extend(samples)
+				elif samples is None and p[0] == 'gene_name' and p[1] == 'geneID':
+					samples = p[2:]
+					if samples[:len(samples)//2] == samples[len(samples)//2:]:
+						samples = samples[:len(samples)//2]
+					values.update(dict((n,[]) for n in samples))
+					values['symbols'] = []
+					values['IDs'] = []
+					indexstart = 2+len(samples) if counts else 2
+					values.samples.extend(samples)
+				elif p[0] == '#allmappedreads':
+					values.allmappedreads.extend([float(v) for v in p[1:]])
+				elif p[0] == '#normalizationreads':
+					values.normalizationreads.extend([float(v) for v in p[1:]])
+				elif line.startswith('#'):
+					continue
+				else:
+					for s,v in zip(samples, p[indexstart:]):
+						if v == '-1': break
+						else: values[s].append(float(v))
+					else:
+						values['symbols'].append(p[0])
+						values['IDs'].append(p[1])
+		if not (numsymbols is None or numsymbols == len(values['symbols'])):
+			raise Exception('Mismatch in number of gene symbols between files')
+		numsymbols = len(values['symbols'])
+	
+	# prepare some dictionaries
+	values.symbol_to_index = dict((s, i) for i, S in enumerate(values['symbols']) for s in S.split('+'))
+	values.symbol_to_index.update(dict((S, i) for i, S in enumerate(values['symbols'])))
+	values.ID_to_index = dict((s, i) for i, S in enumerate(values['IDs']) for s in S.split('+'))
+	values.ID_to_index.update(dict((S, i) for i, S in enumerate(values['IDs'])))
+	
+	return values
+
+class Parsed_rpkms(dict):
+	def __init__(self, infiles, counts):
+		# contains the table of values and names as dictionary with 'symbols', 'IDs' or sample name a key
+		self.samples = []
+		self.filenames = infiles
+		self.allmappedreads = []
+		self.normalizationreads = []
+		self.is_counts = counts
+		self.symbol_to_index = dict()
+		self.ID_to_index = dict()
+	
+	def to_dataframe(self, indexname='symbols'):
+		import pandas
+		return pandas.DataFrame(dict((s,self[s]) for s in self.samples), index=(None if indexname is None else self[indexname]))
+
+def _print(txt, **kwargs):
+	print >>kwargs['file'], txt
+
+def writeexpr(filename, rpkm_expr, counts_expr=None, samples=None, row_indices=None, extra_comment_lines=[]):
+	import sys, time
+	if samples is None: samples = rpkm_expr.samples
+	if row_indices is None: row_indices = range(len(rpkm_expr['symbols']))
+	with openfile(filename, 'w') as outfh:
+		_print(join('#samples', samples), file=outfh)
+		totalreadsD = dict(zip(rpkm_expr.samples, rpkm_expr.allmappedreads))
+		normreadsD = dict(zip(rpkm_expr.samples, rpkm_expr.normalizationreads))
+		if rpkm_expr.allmappedreads != []:
+			_print(join('#allmappedreads', [totalreadsD.get(s, 0) for s in samples]), file=outfh)
+		if rpkm_expr.normalizationreads != []:
+			_print(join('#normalizationreads', [normreadsD.get(s, 0) for s in samples]), file=outfh)
+		_print(join('#arguments', ' '.join(sys.argv), 'time: '+time.asctime()), file=outfh)
+		for line in extra_comment_lines:
+			if not line[0] == '#': line = '#' + line
+			line = line.rstrip('\r\n')
+			_print(line, file=outfh)
+		for i in row_indices:
+			symbol = rpkm_expr['symbols'][i]
+			ID = rpkm_expr['IDs'][i]
+			values_rpkm = (rpkm_expr[s][i] for s in samples)
+			if counts_expr is None:
+				_print(join(symbol, ID, values_rpkm), file=outfh)
+			else:
+				values_reads = (counts_expr[s][i] for s in samples)
+				_print(join(symbol, ID, values_rpkm, map(strip_end_zeros, values_reads)), file=outfh)
 
 class Cexon:
 	def __init__(self, start, end, normalise_with):
@@ -1138,7 +1339,7 @@ def merge(o_infiles, o_outfile):
 	readlines = []
 	for inf in o_infiles:
 		lnumgenes = 0
-		with open(inf, 'r') as infh:
+		with openfile(inf, 'r') as infh:
 			for line in infh:
 				p = line.rstrip('\r\n').split('\t')
 				if p[0] == '#samples':
@@ -1161,7 +1362,7 @@ def merge(o_infiles, o_outfile):
 				raise Exception('Unequal number of genes between files (try running without the -p option)')
 			
 	# write output
-	with open(o_outfile, 'w') as outfh:
+	with openfile(o_outfile, 'w') as outfh:
 		for line in header:
 			print >>outfh, line
 		for linenum in xrange(numgenes):
@@ -1267,8 +1468,10 @@ def main():
 		print " -allmapnorm to normalize by the total number of mapped reads (default if annotation contains no mRNA)"
 		print " -forcedtotal followed by a number of reads for each sample to set a constant to normalise by"
 		print " -tpm to calculate tags per million instead of RPKM"
+		print " -tmm to run TMM normalisation on top of RPKM (or TPM if -tmp is used) normalisation"
 		print "Output format options:"
 		print " -readcount to add the number of reads to the output"
+		print " -csv [read_count_file_out] to output in csv format, optionally with a second output file with read counts in"
 		print " -table another output format"
 		print " -sortpos for output sorted by genome position"
 		print " -exportann followed by a filename to write which exons have been used, also prints exon read counts for the last input file"
@@ -1316,6 +1519,7 @@ def main():
 	except: names = [filename.rsplit("/")[-1] for filename in infiles]
 	compressionsuffixes = ['gz','bz2']
 	vocal = not testargumentflag("-quite")
+	use_tmm = testargumentflag("-tmm")
 	if testargumentflag("-forcedtotal"):
 		forcedtotal = [int(v) for v in getarguments("-forcedtotal")]
 		if len(forcedtotal) != len(infiles):
@@ -1331,6 +1535,8 @@ def main():
 		exportannotation = getargument("-exportann")
 	else: exportannotation = 0
 	
+	if testargumentflag("-readcount"): addreadcount = 1
+	else: addreadcount = 0
 	if testargumentflag("-readpresent") and testargumentflag('-p') and vocal:
 		print 'Warning: -readpresent and -p do not work together'
 	if testargumentflag("-readpresent") and testargumentflag('-table'):
@@ -1338,6 +1544,11 @@ def main():
 		sys.exit(1)
 	elif testargumentflag("-readpresent") and len(infiles)>1 and vocal:
 		print 'Warning: -readpresent will filter based on the first file (%s)'%names[0]
+	OUTPUT_CSV = testargumentflag('-csv')
+	if OUTPUT_CSV:
+		READCOUNTCSV = getpotentialargument("-csv")
+		if READCOUNTCSV is not None:
+			addreadcount = 1
 	if testargumentflag('-p'):
 		# multi-processing mode
 		# this instance of the program will be master and not perform calculations, only merging
@@ -1358,6 +1569,9 @@ def main():
 		rmflag(restargs, '-forcedtotal')
 		rmflag(restargs, '-forcetotal')
 		rmflag(restargs, '-exportann')
+		rmflag(restargs, '-tmm')
+		rmflag(restargs, '-csv')
+		if addreadcount and not testargumentflag("-readcount"): restargs.append("-readcount")
 		try:
 			# launch child instances
 			for procleft in range(processes, 0, -1):
@@ -1391,6 +1605,13 @@ def main():
 			for tmpfile in out:
 				try: os.remove(tmpfile)
 				except: pass
+		
+		if use_tmm:
+			ret = run_tmm(outfile, outfile, copy_counts=addreadcount)
+			if ret: return ret
+			
+		if OUTPUT_CSV:
+			convert_to_csv(outfile, READCOUNTCSV)
 		return 0
 	
 	if testargumentflag("-genePred") or testargumentflag("-refseq"): annotationtype = 0
@@ -1487,8 +1708,6 @@ def main():
 	else: MAXREADS = 0; randomreads = 0; skipiffewreads = 0
 	if testargumentflag("-table"): outputformat = 'table'
 	else: outputformat = 'v2'
-	if testargumentflag("-readcount"): addreadcount = 1
-	else: addreadcount = 0
 	if testargumentflag("-readpresent"): readpresent = True 
 	else: readpresent = False
 	if testargumentflag("-intronsinstead") or testargumentflag("-introns"): INTRONSINSTEAD = 1
@@ -1727,7 +1946,7 @@ def main():
 	# read file with problem regions to remove from annotated genes
 	if testargumentflag("-rmregions"):
 		removalfile = getargument("-rmregions")
-		with open(removalfile, 'r') as infh:
+		with openfile(removalfile, 'r') as infh:
 			for line in infh:
 				chromosome, direction, cdsstart, cdsend, exonstarts, exonends, genename, ID, inferred_strand = fromannotationline(line, 6) # load bed format
 				for start, end in zip(exonstarts, exonends):
@@ -2302,7 +2521,7 @@ def main():
 	
 	# print information about the gene annotation used to file
 	if exportannotation:
-		outfileh = open(exportannotation, 'w')
+		outfileh = openfile(exportannotation, 'w')
 		print >>outfileh, "#numbers for " + infiles[-1]
 		print >>outfileh, '#genename\tchromosome\texons'
 		print >>outfileh, '#exon:\tstart\tend\tlength\treads\ttranscript_IDs'
@@ -2311,6 +2530,13 @@ def main():
 			print >>outfileh, gene.name + '\t' + gene.chromosome +'\t' + str(len(exons))
 			for exon in exons:
 				print >>outfileh, '\t'.join(map(str,['exon:', exon.start, exon.end, exon.length, exon.reads] + [tx.ID+'|'+tx.genename for tx in exon.transcripts]))
+	
+	if use_tmm:
+		ret = run_tmm(outfile, outfile, copy_counts=addreadcount)
+		if ret: return ret
+		
+	if OUTPUT_CSV:
+		convert_to_csv(outfile, READCOUNTCSV)
 	
 	return 0
 
